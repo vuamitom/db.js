@@ -1,6 +1,24 @@
 (function ( window , undefined ) {
     'use strict';
-
+    //==== tam - helper ===================
+    
+    
+    var defaultCompare = function (a, b) {
+        return a - b; 
+    }
+    
+    Array.prototype.insertIncrement = function (val, comparer) {
+        comparer = comparer || defaultCompare;
+        for (var i = 0 ; i < this.length ; i++) {
+            var other = this[i];
+            if (comparer(val, other) < 0) {
+                this.splice(i, 0, val);
+                return;
+            }
+        }
+        this.push(val);
+    }
+    //======== end helper ====================
     var indexedDB = window.indexedDB || window.webkitIndexedDB || window.mozIndexedDB || window.oIndexedDB || window.msIndexedDB,
         IDBKeyRange = window.IDBKeyRange || window.webkitIDBKeyRange,
         transactionModes = {
@@ -134,8 +152,7 @@
             }
 
             var records = [];
-            var counter = 0;
-
+			var counter = 0;
             for (var i = 0; i < arguments.length - 1; i++) {
                 if (Array.isArray(arguments[i + 1])) {
                     for (var j = 0; j < (arguments[i + 1]).length; j++) {
@@ -221,7 +238,8 @@
             transaction.oncomplete = function () {
                 deferred.resolve( records , that );
             };
-            transaction.onerror = function ( e ) {
+            transaction.onerror = function (e) {
+                console.error(e);
                 deferred.reject( records , e );
             };
             transaction.onabort = function ( e ) {
@@ -230,19 +248,30 @@
             return deferred.promise();
         };
         
-        this.remove = function ( table , key ) {
+        this.remove = function ( table  ) {
             if ( closed ) {
                 throw 'Database has been closed';
             }
+
+            var keys = [];
+            for (var i = 0; i < arguments.length - 1; i++) {
+                keys[i] = arguments[i + 1];
+            }
+
+
             var transaction = db.transaction( table , transactionModes.readwrite ),
                 store = transaction.objectStore( table ),
                 deferred = Deferred();
+            //Tam: enable batch delete
+            keys.forEach(function (key) {
+                var req = store.delete(key);
+            })
             
-            var req = store.delete( key );
-            transaction.oncomplete = function ( ) {
-                deferred.resolve( key );
+            transaction.oncomplete = function () {                
+                deferred.resolve( keys );
             };
-            transaction.onerror = function ( e ) {
+            transaction.onerror = function (e) {
+                console.error(e);
                 deferred.reject( e );
             };
             return deferred.promise();
@@ -260,7 +289,8 @@
             transaction.oncomplete = function ( ) {
                 deferred.resolve( );
             };
-            transaction.onerror = function ( e ) {
+            transaction.onerror = function (e) {
+                console.error(e);
                 deferred.reject( e );
             };
             return deferred.promise();
@@ -275,21 +305,116 @@
             delete dbCache[ name ];
         };
 
-        this.get = function ( table , id ) {
-            if ( closed ) {
+        this.get = function (table, id) {
+            if (closed) {
                 throw 'Database has been closed';
             }
-            var transaction = db.transaction( table ),
-                store = transaction.objectStore( table ),
+
+            var transaction = db.transaction(table),
+                store = transaction.objectStore(table),
                 deferred = Deferred();
 
             var req = store.get( id );
             req.onsuccess = function ( e ) {
                 deferred.resolve( e.target.result );
             };
-            transaction.onerror = function ( e ) {
+            transaction.onerror = function (e) {
+                console.error(e);
                 deferred.reject( e );
             };
+
+            return deferred.promise();
+        };
+        this.getExistKey = function (table) {
+            if (closed) {
+                throw 'Database has been closed';
+            }
+            //Tam: allow get multiple keys 
+            var keys = [];
+            for (var i = 0 ; i < arguments.length - 1 ; i++) {
+                keys[i] = arguments[i + 1];
+            }
+
+            var transaction = db.transaction(table),
+                store = transaction.objectStore(table),
+                deferred = Deferred();
+            var results = [];
+            function getNext(dropbox, df) {
+                if (!keys.length) {
+                    //return result
+                    df.resolve(dropbox);
+                    return;
+                }
+                var k = keys.shift();
+                var req = store.get(k);
+                req.onsuccess = function (e) {
+                    var val = e.target.result;
+                    if (val !== undefined) {
+                        dropbox.push(val);
+                    }
+                    getNext(dropbox, df);
+                };
+            }
+
+            transaction.onerror = function (e) {
+                console.error(e);
+                deferred.reject(e);
+            };
+            getNext(results, deferred);
+            return deferred.promise();
+        };        
+
+        //get all existing entity / keys 
+        //by default, sort incremently if keyOnly is passed in
+        this.getAll = function (table, keys, keyOnly) {
+            if ( closed ) {
+                throw 'Database has been closed';
+            }
+            /*
+            var keys = [];
+            for (var i = 0 ; i < arguments.length - 1 ; i++) {
+                keys[i] = arguments[i + 1];
+            }
+            */
+            //keys = keys.getUnique();
+
+            var transaction = db.transaction( table ),
+                store = transaction.objectStore( table ),
+                deferred = Deferred();
+            var results = [];
+            function getNext(dropbox,df) {
+                if (!keys.length) {
+                    //return result
+                    df.resolve(dropbox);
+                    return;
+                }
+                var k = keys.shift();
+                var req = store.get(k);
+                req.onsuccess = function (e) {
+                    var val = e.target.result;
+                    var keyPath = e.target.source.keyPath;
+                    if ( keyPath === null ) {
+                        keyPath = '__id__';
+                    }
+
+                    if (val!== undefined) {
+                        if (keyOnly) {
+                            var id = val[keyPath];
+                            dropbox.insertIncrement(id);
+                        }
+                        else {
+                            dropbox.push(val);
+                        }
+                    }
+                    getNext(dropbox,df);
+                };                
+            }
+
+            transaction.onerror = function (e) {
+                console.error(e);
+                deferred.reject(e);
+            };
+            getNext(results, deferred);            
             return deferred.promise();
         };
 
@@ -322,7 +447,9 @@
         var that = this;
         var modifyObj = false;
 
-        var runQuery = function ( type, args , cursorType , direction, limitRange, filters , mapper ) {
+        var runQuery = function (type, args, cursorType, direction, limitRange, filters, mapper) {
+            //console.log('run query with type = ' + type + ' cursor type = ' + cursorType + ' dir = ' + direction + ' indexName = ' + indexName);
+            //console.log(args);
             var transaction = db.transaction( table, modifyObj ? transactionModes.readwrite : transactionModes.readonly ),
                 store = transaction.objectStore( table ),
                 index = indexName ? store.index( indexName ) : store,
@@ -465,7 +592,8 @@
                     filter: filter,
                     distinct: distinct,
                     modify: modify,
-                    map: map
+                    map: map,
+                    limit: limit 
                 };
             };
             var distinct = function () {
@@ -546,10 +674,9 @@
             }
 
             for ( var indexKey in table.indexes ) {
-                if (store.indexNames.contains(indexKey)) {
+				if (store.indexNames.contains(indexKey)) {
                     continue;
                 }
-                
                 var index = table.indexes[ indexKey ];
                 store.createIndex( indexKey , index.key || indexKey , Object.keys(index).length ? index : { unique: false } );
             }
@@ -601,6 +728,10 @@
                 };
                 request.onerror = function ( e ) {
                     deferred.reject( e );
+                };
+
+                request.onblocked = function (e) {
+                    alert("Please close all other tabs with this site open!");
                 };
             }
 
