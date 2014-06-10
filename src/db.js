@@ -736,6 +736,29 @@
             }
 
             return deferred.promise();
+        }, 
+
+        clear: function(dbName){
+            var request; 
+            if ( dbCache[dbName] ) {
+                try{
+                    dbCache[dbName].close(); 
+                    delete dbCache[dbName];        
+                }
+                catch(e){
+                    console.error(e);
+                }
+            }
+            var deferred = Deferred();
+            request = window.indexedDB.clearDatabase(dbName)
+            request.onsuccess = function (e){
+                deferred.resolve(e);                 
+            }
+
+            request.onerror = function (e){
+                deferred.reject(e);
+            }
+            return deferred.promise(); 
         }
     };
 
